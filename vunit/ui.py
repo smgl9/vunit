@@ -36,11 +36,6 @@ Compilation options allow customization of compilation behavior. Since simulator
 differing options available, generic options may be specified through this interface.
 The following compilation options are known.
 
-``disable_coverage``
-  Disable coverage.
-  Do not add coverage compile flags when running with ``--coverage``. Default is False.
-  Boolean
-
 ``ghdl.flags``
    Extra arguments passed to ``ghdl -a`` command during compilation.
    Must be a list of strings.
@@ -294,6 +289,7 @@ class VUnit(object):  # pylint: disable=too-many-instance-attributes, too-many-p
 
     def __init__(self, args, compile_builtins=True):
         self._args = args
+        self._coverage_file = None
         self._configure_logging(args.log_level)
         self._output_path = abspath(args.output_path)
 
@@ -369,6 +365,48 @@ class VUnit(object):  # pylint: disable=too-many-instance-attributes, too-many-p
         """
         level = getattr(logging, log_level.upper())
         logging.basicConfig(filename=None, format='%(levelname)7s - %(message)s', level=level)
+
+    def enable_coverage(self, file_name):
+        """
+        Enables code coverage collection from the simulator.
+
+        Enables recording of coverage data files for all test cases in the
+        respective test output path. These files are then merged into a single
+        file specified by the ``file_name`` argument.
+
+        When coverage is enabled VUnit only takes the minimal steps
+        required to make the simulator create the coverage files. The
+        VUnit users must still set :ref:`sim <sim_options>` and
+        :ref:`compile <compile_options>` options to configure the
+        simulator specific coverage options they want. The reason for
+        this to allow the VUnit users maximum control of their
+        coverage settings.
+
+        :param file_name: The merged coverage file name
+
+        :example:
+
+        .. code-block:: python
+
+           prj = VUnit.from_argv()
+
+           lib = prj.add_library("lib")
+           source_files = lib.add_source_files("*.vhd")
+
+           # Modelsim/Questa
+           prj.set_compile_option("modelsim.vcom_flags", ["+cover=bs"])
+           lib.set_sim_option("modelsim.vsim_flags", ["-coverage"])
+
+           # RivieraPRO
+           prj.set_compile_option("rivierapro.vcom_flags", ["-coverage", "bs"])
+           lib.set_sim_option("rivierapro.vsim_flags", ["-acdb_cov", "bs"])
+
+           prj.enable_coverage("merge_coverage.ucdb")
+
+
+        .. note: Supported by RivieraPRO and Modelsim/Questa simulators.
+        """
+        self._coverage_file = file_name
 
     def add_external_library(self, library_name, path, vhdl_standard=None):
         """
@@ -778,7 +816,9 @@ avoid location preprocessing of other functions sharing name with a VUnit log or
         if not exists(self._simulator_output_path):
             os.makedirs(self._simulator_output_path)
 
-        return self._simulator_class.from_args(self._simulator_output_path, self._args)
+        return self._simulator_class.from_args(args=self._args,
+                                               output_path=self._simulator_output_path,
+                                               coverage_file=self._coverage_file)
 
     def _main_run(self):
         """

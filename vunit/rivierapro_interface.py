@@ -48,7 +48,7 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
     ]
 
     @classmethod
-    def from_args(cls, output_path, args):
+    def from_args(cls, args, output_path, coverage_file=None, **kwargs):
         """
         Create new instance from command line arguments object
         """
@@ -57,7 +57,7 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
         return cls(prefix=cls.find_prefix(),
                    output_path=output_path,
                    persistent=persistent,
-                   coverage=args.coverage,
+                   coverage_file=coverage_file,
                    gui=args.gui)
 
     @classmethod
@@ -95,27 +95,14 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
         """
         return True
 
-    def __init__(self, prefix, output_path, persistent=False, gui=False, coverage=None):
+    def __init__(self, prefix, output_path, persistent=False, gui=False, coverage_file=None):
         SimulatorInterface.__init__(self, output_path, gui)
         VsimSimulatorMixin.__init__(self, prefix, persistent,
                                     sim_cfg_file_name=join(output_path, "library.cfg"))
         self._create_library_cfg()
         self._libraries = []
-        self._coverage = coverage
+        self._coverage_file = coverage_file
         self._coverage_files = set()
-
-    def add_simulator_specific(self, project):
-        """
-        Add coverage flags
-        """
-        if self._coverage is None:
-            return
-
-        # Add coverage options
-        for source_file in project.get_source_files_in_order():
-            if not source_file.compile_options.get("disable_coverage", False):
-                source_file.add_compile_option("rivierapro.vcom_flags", ['-coverage', self._coverage])
-                source_file.add_compile_option("rivierapro.vlog_flags", ['-coverage', self._coverage])
 
     def setup_library_mapping(self, project):
         """
@@ -227,15 +214,6 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
                                     for name, value in config.generics.items()))
         pli_str = " ".join("-pli \"%s\"" % fix_path(name) for name in config.sim_options.get('pli', []))
 
-        if self._coverage is None:
-            coverage_args = ""
-            coverage_file = ""
-        else:
-            coverage_args = "-acdb_cov " + self._coverage
-            coverage_file_path = join(output_path, "coverage.acdb")
-            self._coverage_files.add(coverage_file_path)
-            coverage_file = "-acdb_file {%s}" % coverage_file_path
-
         vsim_flags = ["-dataset {%s}" % fix_path(join(output_path, "dataset.asdb")),
                       pli_str,
                       set_generic_str,
@@ -246,9 +224,12 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
         if config.architecture_name is not None:
             vsim_flags.append(config.architecture_name)
 
-        vsim_flags += [coverage_args,
-                       coverage_file,
-                       self._vsim_extra_args(config)]
+        if self._coverage_file is not None:
+            coverage_file_path = join(output_path, "coverage.acdb")
+            self._coverage_files.add(coverage_file_path)
+            vsim_flags += ["-acdb_file {%s}" % coverage_file_path]
+
+        vsim_flags += [self._vsim_extra_args(config)]
 
         if config.sim_options.get("disable_ieee_warnings", False):
             vsim_flags.append("-ieee_nowarn")
@@ -328,13 +309,13 @@ proc _vunit_sim_restart {} {
         Merge coverage from all test cases,
         """
 
-        if self._coverage is None:
+        if self._coverage_file is None:
             return
 
         # Teardown to ensure acdb file was written.
         del self._persistent_shell
 
-        merged_coverage_file = join(output_path, "merged_coverage.acdb")
+        self._coverage_file = join(output_path, "merged_coverage.acdb")
         merge_command = "acdb merge"
 
         for coverage_file in self._coverage_files:
@@ -343,7 +324,7 @@ proc _vunit_sim_restart {} {
             else:
                 LOGGER.warning("Missing coverage file: %s", coverage_file)
 
-        merge_command += " -o {%s}" % merged_coverage_file.replace('\\', '/')
+        merge_command += " -o {%s}" % self._coverage_file.replace('\\', '/')
 
         merge_script_name = join(self._output_path, "acdb_merge.tcl")
         with open(merge_script_name, "w") as fptr:
@@ -352,7 +333,7 @@ proc _vunit_sim_restart {} {
         vcover_cmd = [join(self._prefix, 'vsim'), '-c', '-do',
                       'source %s; quit;' % merge_script_name.replace('\\', '/')]
 
-        print("Merging coverage files into %s..." % merged_coverage_file)
+        print("Merging coverage files into %s..." % self._coverage_file)
         vcover_merge_process = Process(vcover_cmd,
                                        env=self.get_env())
         vcover_merge_process.consume_output()
