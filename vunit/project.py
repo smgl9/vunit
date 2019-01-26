@@ -26,7 +26,7 @@ from vunit.parsing.encodings import HDL_FILE_ENCODING
 from vunit.exceptions import CompileError
 from vunit.simulator_factory import SIMULATOR_FACTORY
 from vunit.design_unit import DesignUnit, VHDLDesignUnit, Entity, Module
-import vunit.ostools as ostools
+from vunit import ostools
 LOGGER = logging.getLogger(__name__)
 
 
@@ -249,12 +249,16 @@ class Project(object):  # pylint: disable=too-many-instance-attributes
         Find dependencies from instantiation of verilog modules
         """
         for module_name in source_file.module_dependencies:
-            for library in self._libraries.values():
-                try:
-                    design_unit = library.modules[module_name]
-                    yield design_unit.source_file
-                except KeyError:
-                    pass
+            if module_name in source_file.library.modules:
+                design_unit = source_file.library.modules[module_name]
+                yield design_unit.source_file
+            else:
+                for library in self._libraries.values():
+                    try:
+                        design_unit = library.modules[module_name]
+                        yield design_unit.source_file
+                    except KeyError:
+                        pass
 
     @staticmethod
     def _find_component_design_unit_dependencies(source_file):
@@ -677,6 +681,9 @@ class SourceFile(object):
         self._content_hash = None
         self._compile_options = {}
 
+        # The file name before preprocessing
+        self.original_name = name
+
     @property
     def is_vhdl(self):
         return self.file_type == "vhdl"
@@ -773,7 +780,7 @@ class VerilogSourceFile(SourceFile):
         for path in self.include_dirs:
             self._content_hash = hash_string(self._content_hash + hash_string(path))
 
-        for key, value in self.defines.items():
+        for key, value in sorted(self.defines.items()):
             self._content_hash = hash_string(self._content_hash + hash_string(key))
             self._content_hash = hash_string(self._content_hash + hash_string(value))
 
@@ -791,6 +798,7 @@ class VerilogSourceFile(SourceFile):
                                                  + file_content_hash(included_file_name,
                                                                      encoding=HDL_FILE_ENCODING,
                                                                      database=database))
+
             for module in design_file.modules:
                 self.design_units.append(Module(module.name, self, module.parameters))
 
@@ -807,7 +815,7 @@ class VerilogSourceFile(SourceFile):
                 self.module_dependencies.append(instance_name)
 
         except KeyboardInterrupt:
-            raise
+            raise KeyboardInterrupt
         except:  # pylint: disable=bare-except
             traceback.print_exc()
             LOGGER.error("Failed to parse %s", self.name)
@@ -837,7 +845,7 @@ class VHDLSourceFile(SourceFile):
             try:
                 design_file = vhdl_parser.parse(self.name)
             except KeyboardInterrupt:
-                raise
+                raise KeyboardInterrupt
             except:  # pylint: disable=bare-except
                 traceback.print_exc()
                 LOGGER.error("Failed to parse %s", self.name)
@@ -956,12 +964,14 @@ def file_type_of(file_name):
     _, ext = splitext(file_name)
     if ext.lower() in VHDL_EXTENSIONS:
         return "vhdl"
-    elif ext.lower() in VERILOG_EXTENSIONS:
+
+    if ext.lower() in VERILOG_EXTENSIONS:
         return "verilog"
-    elif ext.lower() in SYSTEM_VERILOG_EXTENSIONS:
+
+    if ext.lower() in SYSTEM_VERILOG_EXTENSIONS:
         return "systemverilog"
-    else:
-        raise RuntimeError("Unknown file ending '%s' of %s" % (ext, file_name))
+
+    raise RuntimeError("Unknown file ending '%s' of %s" % (ext, file_name))
 
 
 def check_vhdl_standard(vhdl_standard, from_str=None):

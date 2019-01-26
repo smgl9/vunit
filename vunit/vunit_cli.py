@@ -5,6 +5,8 @@
 # Copyright (c) 2014-2018, Lars Asplund lars.anders.asplund@gmail.com
 
 """
+.. _custom_cli:
+
 Adding Custom Command Line Arguments
 ------------------------------------
 It is possible to add custom command line arguments to your ``run.py``
@@ -86,6 +88,16 @@ def _create_argument_parser(description=None, for_documentation=False):
                         default='*',
                         help='Tests to run')
 
+    parser.add_argument("--with-attributes",
+                        default=None,
+                        action="append",
+                        help="Only select tests with these attributes set")
+
+    parser.add_argument("--without-attributes",
+                        default=None,
+                        action="append",
+                        help="Only select tests without these attributes set")
+
     parser.add_argument('-l', '--list', action='store_true',
                         default=False,
                         help='Only list all test cases')
@@ -121,6 +133,14 @@ def _create_argument_parser(description=None, for_documentation=False):
     parser.add_argument('-x', '--xunit-xml',
                         default=None,
                         help='Xunit test report .xml file')
+
+    parser.add_argument('--xunit-xml-format',
+                        choices=['jenkins', 'bamboo'],
+                        default='jenkins',
+                        help=('Only valid with --xunit-xml argument. '
+                              'Defines where in the XML file the simulator output is stored on a failure. '
+                              '"jenkins" = Output stored in <system-out>, '
+                              '"bamboo" = Output stored in <failure>.'))
 
     parser.add_argument('--exit-0',
                         default=False,
@@ -162,10 +182,9 @@ def _create_argument_parser(description=None, for_documentation=False):
                         default=False,
                         help="Do not re-use the same simulator process for running different test cases (slower)")
 
-    parser.add_argument("--coverage",
+    parser.add_argument("--export-json",
                         default=None,
-                        nargs="?",
-                        help="Enable code coverage. Works with ModelSim and RivieraPRO.")
+                        help="Export project information to a JSON file.")
 
     parser.add_argument('--version', action='version', version=version())
 

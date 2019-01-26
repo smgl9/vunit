@@ -3,7 +3,8 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2014-2018, Lars Asplund lars.anders.asplund@gmail.com
-# pylint: disable=too-many-public-methods
+#
+# pylint: disable=too-many-public-methods, too-many-lines
 
 """
 Acceptance test of the VUnit public interface class
@@ -14,13 +15,16 @@ import unittest
 from string import Template
 import os
 from os.path import join, dirname, basename, exists, abspath
+import json
 import re
 from re import MULTILINE
 from shutil import rmtree
 from vunit.ui import VUnit
 from vunit.project import VHDL_EXTENSIONS, VERILOG_EXTENSIONS
 from vunit.test.mock_2or3 import mock
-from vunit.test.common import set_env
+from vunit.test.common import (set_env,
+                               with_tempdir,
+                               create_vhdl_test_bench_file)
 from vunit.ostools import renew_path
 from vunit.builtins import add_verilog_include_dir
 from vunit.simulator_interface import SimulatorInterface
@@ -134,6 +138,36 @@ end architecture;
                 entity='ent2',
                 report='log("Here I am!"); -- VUnitfier preprocessor: Report turned off, keeping original code.')
             self.assertEqual(fread.read(), expectd)
+
+    @mock.patch("vunit.ui.LOGGER.error", autospec=True)
+    def test_recovers_from_preprocessing_error(self, logger):
+        ui = self._create_ui()
+        ui.add_library('lib')
+        ui.enable_location_preprocessing()
+        ui.enable_check_preprocessing()
+
+        source_with_error = Template("""
+library vunit_lib;
+context vunit_lib.vunit_context;
+
+entity $entity is
+end entity;
+
+architecture arch of $entity is
+begin
+    log("Hello World";
+    check_relation(1 /= 2);
+    report "Here I am!";
+end architecture;
+""")
+        file_name = join(self.tmp_path, "ent1.vhd")
+        contents = source_with_error.substitute(entity="ent1")
+        self.create_file(file_name, contents)
+
+        ui.add_source_file(file_name, 'lib')
+        logger.assert_called_once_with("Failed to preprocess %s", file_name)
+        pp_file = join(self._preprocessed_path, 'lib', basename(file_name))
+        self.assertFalse(exists(pp_file))
 
     def test_supported_source_file_suffixes(self):
         """Test adding a supported filetype, of any case, is accepted."""
@@ -373,6 +407,131 @@ end entity;
 lib2, ent0.vhd
 lib1, ent0.vhd
 Listed 2 files""".splitlines()))
+
+    @with_tempdir
+    def test_filtering_tests(self, tempdir):
+        def setup(ui):
+            " Setup the project "
+            lib = ui.add_library("lib")
+            file_name = join(tempdir, "tb_filter.vhd")
+            create_vhdl_test_bench_file("tb_filter", file_name,
+                                        tests=["Test 1", "Test 2", "Test 3"],
+                                        test_attributes={
+                                            "Test 1": [".attr0"],
+                                            "Test 2": [".attr0", ".attr1"],
+                                            "Test 3": [".attr1"]
+                                        })
+            lib.add_source_file(file_name)
+
+        def check_stdout(ui, expected):
+            " Check that stdout matches expected "
+            with mock.patch("sys.stdout", autospec=True) as stdout:
+                self._run_main(ui)
+            text = "".join([call[1][0] for call in stdout.write.mock_calls])
+            # @TODO not always in the same order in Python3 due to dependency graph
+            print(text)
+            self.assertEqual(set(text.splitlines()),
+                             set(expected.splitlines()))
+
+        ui = self._create_ui("--list", "*Test 1")
+        setup(ui)
+        check_stdout(ui, "lib.tb_filter.Test 1\nListed 1 tests")
+
+        ui = self._create_ui("--list", "*Test*")
+        setup(ui)
+        check_stdout(ui,
+                     "lib.tb_filter.Test 1\n"
+                     "lib.tb_filter.Test 2\n"
+                     "lib.tb_filter.Test 3\n"
+                     "Listed 3 tests")
+
+        ui = self._create_ui("--list", "*2*")
+        setup(ui)
+        check_stdout(ui,
+                     "lib.tb_filter.Test 2\n"
+                     "Listed 1 tests")
+
+        ui = self._create_ui("--list", "--with-attribute=.attr0")
+        setup(ui)
+        check_stdout(ui,
+                     "lib.tb_filter.Test 1\n"
+                     "lib.tb_filter.Test 2\n"
+                     "Listed 2 tests")
+
+        ui = self._create_ui("--list", "--with-attributes", ".attr0", "--with-attributes", ".attr1")
+        setup(ui)
+        check_stdout(ui,
+                     "lib.tb_filter.Test 2\n"
+                     "Listed 1 tests")
+
+        ui = self._create_ui("--list", "--without-attributes", ".attr0")
+        setup(ui)
+        check_stdout(ui,
+                     "lib.tb_filter.Test 3\n"
+                     "Listed 1 tests")
+
+        ui = self._create_ui("--list", "--without-attributes", ".attr0", "--without-attributes", ".attr1")
+        setup(ui)
+        check_stdout(ui,
+                     "Listed 0 tests")
+
+        ui = self._create_ui("--list",
+                             "--with-attributes", ".attr0",
+                             "--without-attributes", ".attr1")
+        setup(ui)
+        check_stdout(ui,
+                     "lib.tb_filter.Test 1\n"
+                     "Listed 1 tests")
+
+    @with_tempdir
+    def test_export_json(self, tempdir):
+        json_file = join(tempdir, "export.json")
+
+        ui = self._create_ui("--export-json", json_file)
+        lib1 = ui.add_library("lib1")
+        lib2 = ui.add_library("lib2")
+
+        file_name1 = join(tempdir, "tb_foo.vhd")
+        create_vhdl_test_bench_file("tb_foo", file_name1)
+        lib1.add_source_file(file_name1)
+
+        file_name2 = join(tempdir, "tb_bar.vhd")
+        create_vhdl_test_bench_file("tb_bar", file_name2,
+                                    tests=["Test one", "Test two"],
+                                    test_attributes={"Test one": [".attr0"]})
+        lib2.add_source_file(file_name2)
+
+        self._run_main(ui)
+
+        with open(json_file, "r") as fptr:
+            data = json.load(fptr)
+
+        # Check known keys
+        self.assertEqual(set(data.keys()),
+                         set(["export_format_version",
+                              "files",
+                              "tests"]))
+
+        # Check that export format is semantic version with integer values
+        self.assertEqual(set(data["export_format_version"].keys()),
+                         set(("major", "minor", "patch")))
+        assert all(isinstance(value, int)
+                   for value in data["export_format_version"].values())
+
+        # Check the contents of the files section
+        self.assertEqual(set((item["library_name"], item["file_name"])
+                             for item in data["files"]),
+                         set([("lib1", abspath(file_name1)),
+                              ("lib2", abspath(file_name2))]))
+
+        # Check the contents of the tests section
+        self.assertEqual({item["name"]: (item["location"], item["attributes"]) for item in data["tests"]},
+                         {"lib1.tb_foo.all": ({"file_name": file_name1, "offset": 180, "length": 18},
+                                              {}),
+                          "lib2.tb_bar.Test one": ({"file_name": file_name2, "offset": 235, "length": 8},
+                                                   {".attr0": None}),
+                          "lib2.tb_bar.Test two": ({"file_name": file_name2, "offset": 283, "length": 8},
+                                                   {})})
 
     def test_library_attributes(self):
         ui = self._create_ui()
@@ -679,8 +838,8 @@ Listed 2 files""".splitlines()))
 
         source_file2 = lib2.add_source_file(file_name2)
         for lib in [lib1, lib2]:
-            self.assertEqual(set([source_file.name for source_file in lib.get_source_files()]),
-                             set([source_file1.name, source_file2.name]))
+            self.assertEqual({source_file.name for source_file in lib.get_source_files()},
+                             {source_file1.name, source_file2.name})
 
     def test_scan_tests_from_other_file(self):
         for tb_type in ["vhdl", "verilog"]:
@@ -926,17 +1085,17 @@ class MockSimulator(SimulatorInterface):
     name = "mock"
 
     @staticmethod
-    def from_args(*args, **kwargs):
+    def from_args(output_path, *args, **kwargs):  # pylint: disable=unused-argument
         return MockSimulator(output_path="", gui=False)
 
     package_users_depend_on_bodies = False
 
     @staticmethod
-    def compile_source_file_command(*args, **kwargs):  # pylint: disable=arguments-differ
+    def compile_source_file_command(source_file):  # pylint: disable=unused-argument
         return True
 
     @staticmethod
-    def simulate(*args, **kwargs):  # pylint: disable=arguments-differ
+    def simulate(output_path, test_suite_name, config, elaborate_only):  # pylint: disable=unused-argument
         return True
 
 

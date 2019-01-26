@@ -48,6 +48,7 @@ Main Features
 -  :doc:`Logging framework <./logging/user_guide>` supporting display and file output, different log
    levels, visibility settings of levels and design hierarchy, output formatting
    and multiple loggers. Supports machine readable output formats that for example can be read by a spreadsheet.
+-  Requirements trace-ability through :ref:`JSON Export <json_export>` and :ref:`test attributes <attributes>`.
 -  Optional location preprocessor that traces log and check calls back to file
    and line number.
 -  Outputs JUnit report files for better `Jenkins`_ :ref:`integration <continuous_integration>`.
@@ -82,8 +83,10 @@ Operating systems
 Python
 ******
 
--  Python 2.7
 -  Python 3.4 or higher
+-  Python 2.7
+
+   -  VUnit support for Python 2.7 will end in 1 Jan 2020 when it reaches end of life.
 
 Simulators
 **********
@@ -144,7 +147,8 @@ Founders
 
 Notable contributors
 ********************
-- `Colin Marquardt <https://github.com/cmarqu>`_ (Cadence Incisive support)
+- `Colin Marquardt <https://github.com/cmarqu>`_: Cadence Incisive support
+- `Sławomir Siluk <https://github.com/slaweksiluk>`_: Verification Components such as Avalon and Wishbone
 
 
 License

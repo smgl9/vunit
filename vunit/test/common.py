@@ -142,3 +142,80 @@ def with_tempdir(func):
             return func(*args, tempdir=path, **kwargs)
 
     return new_function
+
+
+def get_vhdl_test_bench(test_bench_name,
+                        tests=None,
+                        same_sim=False,
+                        test_attributes=None):
+    """
+    Create a valid VUnit test bench
+
+    returns a string
+    """
+
+    if test_attributes is None:
+        test_attributes = {}
+
+    tests_contents = ""
+    if tests is None:
+        pass
+    else:
+        tests_contents = ""
+        last_idx = len(tests)
+        for idx, test_name in enumerate(tests):
+            if idx == 0:
+                tests_contents += "    if "
+            else:
+                tests_contents += "    elsif "
+
+            tests_contents += 'run("%s") then\n' % test_name
+
+            if test_name in test_attributes:
+                for attr_name in test_attributes[test_name]:
+                    tests_contents += "-- vunit: %s\n" % attr_name
+
+            if idx == last_idx:
+                tests_contents += '    endif;\n'
+
+    if same_sim:
+        contents = "-- vunit: run_all_in_same_sim\n"
+    else:
+        contents = "\n"
+
+    contents += """\
+library vunit_lib;
+context vunit_lib.vunit_context;
+
+entity {test_bench_name} is
+  generic (runner_cfg : string);
+end entity;
+
+architecture a of {test_bench_name} is
+begin
+  main : process
+  begin
+    test_runner_setup(runner, runner_cfg);
+    {tests_contents}
+    test_runner_cleanup(runner);
+  end process;
+end architecture;
+""".format(test_bench_name=test_bench_name,
+           tests_contents=tests_contents)
+
+    return contents
+
+
+def create_vhdl_test_bench_file(test_bench_name,
+                                file_name,
+                                tests=None,
+                                same_sim=False,
+                                test_attributes=None):
+    """
+    Create a valid VUnit test bench and writes it to file_name
+    """
+    with open(file_name, "wb") as fptr:
+        fptr.write(get_vhdl_test_bench(test_bench_name=test_bench_name,
+                                       tests=tests,
+                                       same_sim=same_sim,
+                                       test_attributes=test_attributes).encode("utf-8"))

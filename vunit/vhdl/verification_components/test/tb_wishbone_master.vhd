@@ -31,6 +31,7 @@ architecture a of tb_wishbone_master is
     dat_width : positive;
     adr_width : positive;
     num_cycles : positive;
+    strobe_prob : real;
     ack_prob : real;
     stall_prob : real;
   end record tb_cfg_t;
@@ -40,6 +41,7 @@ architecture a of tb_wishbone_master is
     return (dat_width => positive'value(get(encoded_tb_cfg, "dat_width")),
             adr_width => positive'value(get(encoded_tb_cfg, "adr_width")),
             num_cycles => positive'value(get(encoded_tb_cfg, "num_cycles")),
+            strobe_prob => real'value(get(encoded_tb_cfg, "strobe_prob")),
             ack_prob => real'value(get(encoded_tb_cfg, "ack_prob")),
             stall_prob => real'value(get(encoded_tb_cfg, "stall_prob")));
   end function decode;
@@ -64,12 +66,17 @@ architecture a of tb_wishbone_master is
 
   constant memory : memory_t := new_memory;
   constant buf : buffer_t := allocate(memory, tb_cfg.num_cycles * sel'length);
-  constant wishbone_slave : wishbone_slave_t := new_wishbone_slave(memory => memory);
+  constant wishbone_slave : wishbone_slave_t := new_wishbone_slave(
+    memory => memory,
+    ack_high_probability => tb_cfg.ack_prob,
+    stall_high_probability => tb_cfg.stall_prob
+  );
 
 begin
 
   main_stim : process
     variable tmp : std_logic_vector(dat_i'range);
+    variable chk_time : time;
     variable value : std_logic_vector(dat_i'range) := (others => '1');
     variable bus_rd_ref1 : bus_reference_t;
     variable bus_rd_ref2 : bus_reference_t;
@@ -107,11 +114,6 @@ begin
             std_logic_vector(to_unsigned(i, dat_i'length)));
       end loop;
 
-      for i in 1 to tb_cfg.num_cycles loop
-        wait until ack = '1' and rising_edge(clk);
-      end loop;
-      wait until rising_edge(clk);
-
       info(tb_logger, "Reading...");
       for i in 0 to tb_cfg.num_cycles-1 loop
         read_bus(net, bus_handle, i*(sel'length), tmp);
@@ -125,9 +127,6 @@ begin
             std_logic_vector(to_unsigned(i, dat_i'length)));
       end loop;
 
-      -- Sleeping is needed to avoid wr and rd cycles coalescing
-      wait until rising_edge(clk);
-
       info(tb_logger, "Reading...");
       for i in 0 to tb_cfg.num_cycles-1 loop
         read_bus(net, bus_handle, i*(sel'length), rd_ref(i));
@@ -138,6 +137,25 @@ begin
         await_read_bus_reply(net, rd_ref(i), tmp);
         check_equal(tmp, std_logic_vector(to_unsigned(i, dat_i'length)), "read data");
       end loop;
+
+    elsif run ("wait for idle") then
+      for i in 0 to 5 loop
+        chk_time := now;
+        read_bus(net, bus_handle, 0, bus_rd_ref1);
+        write_bus(net, bus_handle, 0, value);
+        read_bus(net, bus_handle, 0, bus_rd_ref2);
+        check_equal(chk_time, now, "tb concept broken, command issueing takes time");
+        wait_until_idle(net, bus_handle);
+        check_equal(cyc, '0', "bus not idle");
+        info(tb_logger, "Waited for " & to_string(now-chk_time));
+        chk_time := now;
+        await_read_bus_reply(net, bus_rd_ref1, tmp);
+        await_read_bus_reply(net, bus_rd_ref2, tmp);
+        check_equal(chk_time, now, "reading was not done");
+        check_equal(tmp, value, "read value incorrect");
+        wait for 20 ns;
+      end loop;
+
     end if;
 
     info(tb_logger, "Done, quit...");
@@ -149,7 +167,8 @@ begin
 
   dut : entity work.wishbone_master
     generic map (
-      bus_handle => bus_handle)
+      bus_handle => bus_handle,
+      strobe_high_probability => tb_cfg.strobe_prob)
     port map (
       clk   => clk,
       adr   => adr,

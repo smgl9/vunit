@@ -97,6 +97,18 @@ class TestVerilogPreprocessor(TestCase):
 `foo(hello hey)""")
         result.assert_has_tokens("hello hey 123")
 
+    def test_preprocess_substitute_define_with_space_before_arg(self):
+        result = self.preprocess("""\
+`define foo(arg) arg
+`foo (hello)""")
+        result.assert_has_tokens("hello")
+
+    def test_preprocess_substitute_define_no_args(self):
+        result = self.preprocess("""\
+`define foo bar
+`foo (hello)""")
+        result.assert_has_tokens("bar (hello)")
+
     def test_preprocess_substitute_define_with_multile_args(self):
         result = self.preprocess("""\
 `define foo(arg1, arg2)arg1,arg2
@@ -750,9 +762,15 @@ keep''')
         result.assert_has_tokens(" keep")
         result.assert_no_log()
 
-    def test_ignores_unconnected_drive(self):
-        result = self.preprocess('`unconnected_drive pull1\nkeep')
-        result.assert_has_tokens("\nkeep")
+    def test_ignores_protected_region(self):
+        result = self.preprocess("""\
+keep_before
+`pragma protect begin_protected
+ASDADSJAKSJDKSAJDISA
+`pragma protect end_protected
+keep_end""")
+
+        result.assert_has_tokens("keep_before\n\nkeep_end")
         result.assert_no_log()
 
     def preprocess(self, code, file_name="fn.v", include_paths=None):

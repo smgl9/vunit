@@ -54,6 +54,7 @@ class TestExternalRunScripts(unittest.TestCase):
         self.check(join(ROOT, "examples", "vhdl", "run", "run.py"), exit_code=1)
         check_report(self.report_file,
                      [("passed", "lib.tb_with_watchdog.Test to_string for boolean"),
+                      ("passed", "lib.tb_with_watchdog.Test that needs longer timeout"),
                       ("passed", "lib.tb_standalone.Test to_string for boolean"),
                       ("passed", "lib.tb_with_test_cases.Test to_string for integer"),
                       ("passed", "lib.tb_with_test_cases.Test to_string for boolean"),
@@ -149,9 +150,6 @@ class TestExternalRunScripts(unittest.TestCase):
 
     def test_random_vhdl_2008(self):
         self.check(join(VHDL_PATH, "random", "run.py"))
-
-    def test_verification_components_vhdl_2008(self):
-        self.check(join(VHDL_PATH, "verification_components", "run.py"))
 
     def test_check_vhdl_2008(self):
         self.check(join(VHDL_PATH, "check", "run.py"))

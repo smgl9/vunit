@@ -48,7 +48,7 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
     ]
 
     @classmethod
-    def from_args(cls, output_path, args):
+    def from_args(cls, args, output_path, **kwargs):
         """
         Create new instance from command line arguments object
         """
@@ -57,7 +57,6 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
         return cls(prefix=cls.find_prefix(),
                    output_path=output_path,
                    persistent=persistent,
-                   coverage=args.coverage,
                    gui=args.gui)
 
     @classmethod
@@ -95,33 +94,30 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
         """
         return True
 
-    def __init__(self, prefix, output_path, persistent=False, gui=False, coverage=None):
+    def __init__(self, prefix, output_path, persistent=False, gui=False):
         SimulatorInterface.__init__(self, output_path, gui)
         VsimSimulatorMixin.__init__(self, prefix, persistent,
                                     sim_cfg_file_name=join(output_path, "library.cfg"))
         self._create_library_cfg()
         self._libraries = []
-        self._coverage = coverage
         self._coverage_files = set()
 
     def add_simulator_specific(self, project):
         """
-        Add coverage flags
+        Add builtin (global) libraries
         """
-        if self._coverage is None:
-            return
+        built_in_libraries = self._get_mapped_libraries(self._builtin_library_cfg)
 
-        # Add coverage options
-        for source_file in project.get_source_files_in_order():
-            if not source_file.compile_options.get("disable_coverage", False):
-                source_file.add_compile_option("rivierapro.vcom_flags", ['-coverage', self._coverage])
-                source_file.add_compile_option("rivierapro.vlog_flags", ['-coverage', self._coverage])
+        for library_name in built_in_libraries:
+            # A user might shadow a built in library with their own version
+            if not project.has_library(library_name):
+                project.add_builtin_library(library_name)
 
     def setup_library_mapping(self, project):
         """
         Setup library mapping
         """
-        mapped_libraries = self._get_mapped_libraries()
+        mapped_libraries = self._get_mapped_libraries(self._sim_cfg_file_name)
         for library in project.get_libraries():
             self._libraries.append(library)
             self.create_library(library.name, library.directory, mapped_libraries)
@@ -132,7 +128,8 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
         """
         if source_file.is_vhdl:
             return self.compile_vhdl_file_command(source_file)
-        elif source_file.is_any_verilog:
+
+        if source_file.is_any_verilog:
             return self.compile_verilog_file_command(source_file)
 
         LOGGER.error("Unknown file type: %s", source_file.file_type)
@@ -194,25 +191,30 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
             return
 
         with open(self._sim_cfg_file_name, "w") as ofile:
-            ofile.write('$INCLUDE = "%s"\n' % join(self._prefix, "..", "vlib", "library.cfg"))
+            ofile.write('$INCLUDE = "%s"\n' % self._builtin_library_cfg)
 
-    _library_re = re.compile(r'([a-zA-Z_0-9]+)\s=\s"(.*)"')
+    @property
+    def _builtin_library_cfg(self):
+        return join(self._prefix, "..", "vlib", "library.cfg")
 
-    def _get_mapped_libraries(self):
+    _library_re = re.compile(r'([a-zA-Z_0-9]+)\s=\s(.*)')
+
+    def _get_mapped_libraries(self, library_cfg_file):
         """
-        Get mapped libraries from library.cfg file
+        Get mapped libraries by running vlist on the working directory
         """
-        with open(self._sim_cfg_file_name, "r") as fptr:
-            text = fptr.read()
+        lines = []
+        proc = Process([join(self._prefix, 'vlist')], cwd=dirname(library_cfg_file))
+        proc.consume_output(callback=lines.append)
 
         libraries = {}
-        for line in text.splitlines():
+        for line in lines:
             match = self._library_re.match(line)
             if match is None:
                 continue
             key = match.group(1)
             value = match.group(2)
-            libraries[key] = abspath(join(dirname(self._sim_cfg_file_name), dirname(value)))
+            libraries[key] = abspath(join(dirname(library_cfg_file), dirname(value)))
         return libraries
 
     def _create_load_function(self,
@@ -227,37 +229,37 @@ class RivieraProInterface(VsimSimulatorMixin, SimulatorInterface):
                                     for name, value in config.generics.items()))
         pli_str = " ".join("-pli \"%s\"" % fix_path(name) for name in config.sim_options.get('pli', []))
 
-        if self._coverage is None:
-            coverage_args = ""
-            coverage_file = ""
-        else:
-            coverage_args = "-acdb_cov " + self._coverage
-            coverage_file_path = join(output_path, "coverage.acdb")
-            self._coverage_files.add(coverage_file_path)
-            coverage_file = "-acdb_file {%s}" % coverage_file_path
-
         vsim_flags = ["-dataset {%s}" % fix_path(join(output_path, "dataset.asdb")),
                       pli_str,
-                      set_generic_str,
-                      "-lib",
-                      config.library_name,
-                      config.entity_name]
+                      set_generic_str]
 
-        if config.architecture_name is not None:
-            vsim_flags.append(config.architecture_name)
+        if config.sim_options.get("enable_coverage", False):
+            coverage_file_path = join(output_path, "coverage.acdb")
+            self._coverage_files.add(coverage_file_path)
+            vsim_flags += ["-acdb_file {%s}" % coverage_file_path]
 
-        vsim_flags += [coverage_args,
-                       coverage_file,
-                       self._vsim_extra_args(config)]
+        vsim_flags += [self._vsim_extra_args(config)]
 
         if config.sim_options.get("disable_ieee_warnings", False):
             vsim_flags.append("-ieee_nowarn")
+
+        # Add the the testbench top-level unit last as coverage is
+        # only collected for the top-level unit specified last
+        vsim_flags += ["-lib",
+                       config.library_name,
+                       config.entity_name]
+
+        if config.architecture_name is not None:
+            vsim_flags.append(config.architecture_name)
 
         tcl = """
 proc vunit_load {{}} {{
     # Make the variable 'aldec' visible; otherwise, the Matlab interface
     # is broken because vsim does not find the library aldec_matlab_cosim.
     global aldec
+    # Make the variable 'LICENSE_QUEUE' visible (if set); otherwise vsim
+    # will not wait for simulation licenses.
+    global LICENSE_QUEUE
 
     set vsim_failed [catch {{
         eval vsim {{{vsim_flags}}}
@@ -323,18 +325,15 @@ proc _vunit_sim_restart {} {
 }
 """
 
-    def post_process(self, output_path):
+    def merge_coverage(self, file_name, args=None):
         """
         Merge coverage from all test cases,
         """
 
-        if self._coverage is None:
-            return
+        if self._persistent_shell is not None:
+            # Teardown to ensure acdb file was written.
+            self._persistent_shell.teardown()
 
-        # Teardown to ensure acdb file was written.
-        del self._persistent_shell
-
-        merged_coverage_file = join(output_path, "merged_coverage.acdb")
         merge_command = "acdb merge"
 
         for coverage_file in self._coverage_files:
@@ -343,7 +342,10 @@ proc _vunit_sim_restart {} {
             else:
                 LOGGER.warning("Missing coverage file: %s", coverage_file)
 
-        merge_command += " -o {%s}" % merged_coverage_file.replace('\\', '/')
+        if args is not None:
+            merge_command += " " + " ".join("{%s}" % arg for arg in args)
+
+        merge_command += " -o {%s}" % file_name.replace('\\', '/')
 
         merge_script_name = join(self._output_path, "acdb_merge.tcl")
         with open(merge_script_name, "w") as fptr:
@@ -352,7 +354,7 @@ proc _vunit_sim_restart {} {
         vcover_cmd = [join(self._prefix, 'vsim'), '-c', '-do',
                       'source %s; quit;' % merge_script_name.replace('\\', '/')]
 
-        print("Merging coverage files into %s..." % merged_coverage_file)
+        print("Merging coverage files into %s..." % file_name)
         vcover_merge_process = Process(vcover_cmd,
                                        env=self.get_env())
         vcover_merge_process.consume_output()

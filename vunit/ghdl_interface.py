@@ -28,6 +28,7 @@ class GHDLInterface(SimulatorInterface):
     """
 
     name = "ghdl"
+    executable = os.environ.get("GHDL", "ghdl")
     supports_gui_flag = True
     supports_colors_in_gui = True
 
@@ -55,9 +56,7 @@ class GHDLInterface(SimulatorInterface):
                            help="Arguments to pass to gtkwave")
 
     @classmethod
-    def from_args(cls,
-                  output_path,  # pylint: disable=unused-argument
-                  args):
+    def from_args(cls, args, output_path, **kwargs):
         """
         Create instance from args namespace
         """
@@ -74,7 +73,7 @@ class GHDLInterface(SimulatorInterface):
         """
         Find first valid ghdl toolchain prefix
         """
-        return cls.find_toolchain(["ghdl"])
+        return cls.find_toolchain([cls.executable])
 
     def __init__(self,  # pylint: disable=too-many-arguments
                  output_path, prefix, gui=False, gtkwave_fmt=None, gtkwave_args="", backend="llvm"):
@@ -92,8 +91,8 @@ class GHDLInterface(SimulatorInterface):
         self._backend = backend
         self._vhdl_standard = None
 
-    @staticmethod
-    def determine_backend(prefix):
+    @classmethod
+    def determine_backend(cls, prefix):
         """
         Determine the GHDL backend
         """
@@ -102,7 +101,7 @@ class GHDLInterface(SimulatorInterface):
             "llvm code generator": "llvm",
             "GCC back-end code generator": "gcc"
         }
-        output = subprocess.check_output([join(prefix, "ghdl"), "--version"]).decode()
+        output = subprocess.check_output([join(prefix, cls.executable), "--version"]).decode()
         for name, backend in mapping.items():
             if name in output:
                 LOGGER.debug("Detected GHDL %s", name)
@@ -158,17 +157,20 @@ class GHDLInterface(SimulatorInterface):
         """
         if vhdl_standard == "2002":
             return "02"
-        elif vhdl_standard == "2008":
+
+        if vhdl_standard == "2008":
             return "08"
-        elif vhdl_standard == "93":
+
+        if vhdl_standard == "93":
             return "93"
+
         raise ValueError("Invalid VHDL standard %s" % vhdl_standard)
 
     def compile_vhdl_file_command(self, source_file):
         """
         Returns the command to compile a vhdl file
         """
-        cmd = [join(self._prefix, 'ghdl'), '-a', '--workdir=%s' % source_file.library.directory,
+        cmd = [join(self._prefix, self.executable), '-a', '--workdir=%s' % source_file.library.directory,
                '--work=%s' % source_file.library.name,
                '--std=%s' % self._std_str(source_file.get_vhdl_standard())]
         for library in self._project.get_libraries():
@@ -181,7 +183,7 @@ class GHDLInterface(SimulatorInterface):
         """
         Return GHDL simulation command
         """
-        cmd = [join(self._prefix, 'ghdl')]
+        cmd = [join(self._prefix, self.executable)]
         cmd += ['--elab-run']
         cmd += ['--std=%s' % self._std_str(self._vhdl_standard)]
         cmd += ['--work=%s' % config.library_name]

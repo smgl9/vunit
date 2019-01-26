@@ -6,11 +6,14 @@
 --
 -- Copyright (c) 2014-2018, Lars Asplund lars.anders.asplund@gmail.com
 
+-- vunit: run_all_in_same_sim
+
 library ieee;
 use ieee.std_logic_1164.all;
 library vunit_lib;
 use vunit_lib.run_types_pkg.all;
 use vunit_lib.run_pkg.all;
+use vunit_lib.runner_pkg.all;
 use vunit_lib.log_levels_pkg.all;
 use vunit_lib.logger_pkg.all;
 use vunit_lib.checker_pkg.all;
@@ -80,7 +83,7 @@ architecture test_fixture of tb_check_stable is
 begin
   clock : process is
   begin
-    while runner.phase < test_runner_exit loop
+    while get_phase(runner_state) < test_runner_exit loop
       clk <= '1', '0' after 5 ns;
       wait for 10 ns;
     end loop;
@@ -654,5 +657,3 @@ begin
   test_runner_watchdog(runner, 4 us);
 
 end test_fixture;
-
--- vunit_pragma run_all_in_same_sim

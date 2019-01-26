@@ -28,6 +28,9 @@
 .. autoclass:: vunit.ui.Test()
    :members:
 
+.. autoclass:: vunit.ui.Results()
+   :members:
+
 .. _compile_options:
 
 Compilation Options
@@ -35,11 +38,6 @@ Compilation Options
 Compilation options allow customization of compilation behavior. Since simulators have
 differing options available, generic options may be specified through this interface.
 The following compilation options are known.
-
-``disable_coverage``
-  Disable coverage.
-  Do not add coverage compile flags when running with ``--coverage``. Default is False.
-  Boolean
 
 ``ghdl.flags``
    Extra arguments passed to ``ghdl -a`` command during compilation.
@@ -91,15 +89,33 @@ The following simulation options are known.
 ``vhdl_assert_stop_level``
   Will stop a VHDL simulation for asserts on the provided severity level or higher.
   Valid values are ``"warning"``, ``"error"``, and ``"failure"``. This option takes
-  precedence over the fail_on_warning pragma.
+  precedence over the fail_on_warning attribute.
 
 ``disable_ieee_warnings``
-  Disable ieee warnings
-  Boolean
+  Disable ieee warnings. Must be a boolean value. Default is False.
+
+.. _coverage:
+
+``enable_coverage``
+  Enables code coverage collection during simulator for the run affected by the sim_option.
+  Must be a boolean value. Default is False.
+
+  When coverage is enabled VUnit only takes the minimal steps required
+  to make the simulator creates an unique coverage file for the
+  simulation run. The VUnit users must still set :ref:`sim
+  <sim_options>` and :ref:`compile <compile_options>` options to
+  configure the simulator specific coverage options they want. The
+  reason for this to allow the VUnit users maximum control of their
+  coverage settings.
+
+  An example of a ``run.py`` file using coverage can be found
+  :vunit_example:`here <vhdl/coverage>`.
+
+  .. note: Supported by RivieraPRO and Modelsim/Questa simulators.
+
 
 ``pli``
-  A list of PLI files
-  A list of file names
+  A list of PLI file names.
 
 ``ghdl.flags``
    Extra arguments passed to ``ghdl --elab-run`` command *before* executable specific flags. Must be a list of strings.
@@ -195,7 +211,7 @@ common for the entire test bench depending on the situation.  For test
 benches without test such as `tb_example` in the User Guide the
 configuration is common for the entire test bench. For test benches
 containing tests such as `tb_example_many` the configuration is done
-for each test case. If the ``run_all_in_same_sim`` pragma has been used
+for each test case. If the ``run_all_in_same_sim`` attribute has been used
 configuration is performed at the test bench level even if there are
 individual test within since they must run in the same simulation.
 
@@ -216,12 +232,13 @@ import csv
 import sys
 import traceback
 import logging
+import json
 import os
 from os.path import exists, abspath, join, basename, splitext, normpath, dirname
 from glob import glob
 from fnmatch import fnmatch
 from vunit.database import PickledDataBase, DataBase
-import vunit.ostools as ostools
+from vunit import ostools
 from vunit.vunit_cli import VUnitCLI
 from vunit.simulator_factory import SIMULATOR_FACTORY
 from vunit.simulator_interface import (is_string_not_iterable,
@@ -303,8 +320,15 @@ class VUnit(object):  # pylint: disable=too-many-instance-attributes, too-many-p
         else:
             self._printer = COLOR_PRINTER
 
-        def test_filter(name):
-            return any(fnmatch(name, pattern) for pattern in args.test_patterns)
+        def test_filter(name, attribute_names):
+            keep = any(fnmatch(name, pattern) for pattern in args.test_patterns)
+
+            if args.with_attributes is not None:
+                keep = keep and set(args.with_attributes).issubset(attribute_names)
+
+            if args.without_attributes is not None:
+                keep = keep and set(args.without_attributes).isdisjoint(attribute_names)
+            return keep
 
         self._test_filter = test_filter
         self._vhdl_standard = select_vhdl_standard(vhdl_standard)
@@ -346,13 +370,13 @@ class VUnit(object):  # pylint: disable=too-many-instance-attributes, too-many-p
         project_database_file_name = join(self._output_path, "project_database")
         create_new = False
         key = b"version"
-        version = str((7, sys.version)).encode()
+        version = str((9, sys.version)).encode()
         database = None
         try:
             database = DataBase(project_database_file_name)
             create_new = (key not in database) or (database[key] != version)
         except KeyboardInterrupt:
-            raise
+            raise KeyboardInterrupt
         except:  # pylint: disable=bare-except
             traceback.print_exc()
             create_new = True
@@ -696,21 +720,28 @@ class VUnit(object):  # pylint: disable=too-many-instance-attributes, too-many-p
         if not preprocessors:
             return file_name
 
-        code = ostools.read_file(file_name, encoding=HDL_FILE_ENCODING)
-        for preprocessor in preprocessors:
-            code = preprocessor.run(code, basename(file_name))
+        try:
+            code = ostools.read_file(file_name, encoding=HDL_FILE_ENCODING)
+            for preprocessor in preprocessors:
+                code = preprocessor.run(code, basename(file_name))
+        except KeyboardInterrupt:
+            raise KeyboardInterrupt
+        except:  # pylint: disable=bare-except
+            traceback.print_exc()
+            LOGGER.error("Failed to preprocess %s", file_name)
+            return file_name
+        else:
+            pp_file_name = join(self._preprocessed_path, library_name, basename(file_name))
 
-        pp_file_name = join(self._preprocessed_path, library_name, basename(file_name))
+            idx = 1
+            while ostools.file_exists(pp_file_name):
+                LOGGER.debug("Preprocessed file exists '%s', adding prefix", pp_file_name)
+                pp_file_name = join(self._preprocessed_path,
+                                    library_name, "%i_%s" % (idx, basename(file_name)))
+                idx += 1
 
-        idx = 1
-        while ostools.file_exists(pp_file_name):
-            LOGGER.debug("Preprocessed file exists '%s', adding prefix", pp_file_name)
-            pp_file_name = join(self._preprocessed_path,
-                                library_name, "%i_%s" % (idx, basename(file_name)))
-            idx += 1
-
-        ostools.write_file(pp_file_name, code, encoding=HDL_FILE_ENCODING)
-        return pp_file_name
+            ostools.write_file(pp_file_name, code, encoding=HDL_FILE_ENCODING)
+            return pp_file_name
 
     def add_preprocessor(self, preprocessor):
         """
@@ -755,7 +786,9 @@ avoid location preprocessing of other functions sharing name with a VUnit log or
         """
         Run vunit main function and exit
 
-        :param post_run: A function with no arguments to be called after running tests
+        :param post_run: A callback function which is called after
+          running tests. The function must accept a single `results`
+          argument which is an instance of :class:`.Results`
         """
         try:
             all_ok = self._main(post_run)
@@ -790,18 +823,19 @@ avoid location preprocessing of other functions sharing name with a VUnit log or
         Base vunit main function without performing exit
         """
 
+        if self._args.export_json is not None:
+            return self._main_export_json(self._args.export_json)
+
         if self._args.list:
             return self._main_list_only()
 
-        elif self._args.files:
+        if self._args.files:
             return self._main_list_files_only()
 
-        elif self._args.compile:
+        if self._args.compile:
             return self._main_compile_only()
 
-        all_ok = self._main_run()
-        if post_run is not None:
-            post_run()
+        all_ok = self._main_run(post_run)
         return all_ok
 
     def _create_simulator_if(self):
@@ -819,9 +853,10 @@ avoid location preprocessing of other functions sharing name with a VUnit log or
         if not exists(self._simulator_output_path):
             os.makedirs(self._simulator_output_path)
 
-        return self._simulator_class.from_args(self._simulator_output_path, self._args)
+        return self._simulator_class.from_args(args=self._args,
+                                               output_path=self._simulator_output_path)
 
-    def _main_run(self):
+    def _main_run(self, post_run):
         """
         Main with running tests
         """
@@ -832,18 +867,26 @@ avoid location preprocessing of other functions sharing name with a VUnit log or
 
         start_time = ostools.get_time()
         report = TestReport(printer=self._printer)
+
         try:
             self._run_test(test_list, report)
-            simulator_if.post_process(self._simulator_output_path)
         except KeyboardInterrupt:
             print()
             LOGGER.debug("_main: Caught Ctrl-C shutting down")
         finally:
             del test_list
-            del simulator_if
 
         report.set_real_total_time(ostools.get_time() - start_time)
-        self._post_process(report)
+        report.print_str()
+
+        if post_run is not None:
+            post_run(results=Results(simulator_if))
+
+        del simulator_if
+
+        if self._args.xunit_xml is not None:
+            xml = report.to_junit_xml_str(self._args.xunit_xml_format)
+            ostools.write_file(self._args.xunit_xml, xml)
 
         return report.all_ok()
 
@@ -852,10 +895,55 @@ avoid location preprocessing of other functions sharing name with a VUnit log or
         Main function when only listing test cases
         """
         test_list = self._create_tests(simulator_if=None)
-        for test_suite in test_list:
-            for name in test_suite.test_cases:
-                print(name)
-        print("Listed %i tests" % test_list.num_tests())
+        for test_name in test_list.test_names:
+            print(test_name)
+        print("Listed %i tests" % test_list.num_tests)
+        return True
+
+    def _main_export_json(self, json_file_name):
+        """
+        Main function when exporting to JSON
+        """
+
+        file_objects = self.get_compile_order()
+        files = []
+        for source_file in file_objects:
+            files.append(dict(file_name=abspath(source_file.name),
+                              library_name=source_file.library.name))
+
+        tests = []
+        for test_suite in self._create_tests(simulator_if=None):
+            test_information = test_suite.test_information
+            for name in test_suite.test_names:
+                info = test_information[name]
+
+                attributes = {}
+                for attr in info.attributes:
+                    attributes[attr.name] = attr.value
+
+                tests.append(dict(name=name,
+                                  location=dict(file_name=info.location.file_name,
+                                                offset=info.location.offset,
+                                                length=info.location.length),
+                                  attributes=attributes))
+
+        json_data = dict(
+            # The semantic version (https://semver.org/) of the JSON export data format
+            export_format_version=dict(major=1, minor=0, patch=0),
+
+            # The set of files added to the project
+            files=files,
+
+            # The list of all tests
+            tests=tests)
+
+        with open(json_file_name, "w") as fptr:
+            json.dump(json_data,
+                      fptr,
+                      sort_keys=True,
+                      indent=4,
+                      separators=(',', ': '))
+
         return True
 
     def _main_list_files_only(self):
@@ -927,16 +1015,6 @@ avoid location preprocessing of other functions sharing name with a VUnit log or
                             dont_catch_exceptions=self._args.dont_catch_exceptions,
                             no_color=self._args.no_color)
         runner.run(test_cases)
-
-    def _post_process(self, report):
-        """
-        Print the report to stdout and optionally write it to an XML file
-        """
-        report.print_str()
-
-        if self._args.xunit_xml is not None:
-            xml = report.to_junit_xml_str()
-            ostools.write_file(self._args.xunit_xml, xml)
 
     def add_builtins(self):
         """
@@ -1217,6 +1295,7 @@ class Library(object):
            library.add_source_file("file.vhd")
 
         """
+        file_name = abspath(file_name)
 
         if file_type is None:
             file_type = file_type_of(file_name)
@@ -1227,16 +1306,19 @@ class Library(object):
             include_dirs = include_dirs if include_dirs is not None else []
             include_dirs = add_verilog_include_dir(include_dirs)
 
-        file_name = self._parent._preprocess(  # pylint: disable=protected-access
-            self._library_name, abspath(file_name), preprocessors)
+        new_file_name = self._parent._preprocess(  # pylint: disable=protected-access
+            self._library_name, file_name, preprocessors)
 
-        source_file = self._project.add_source_file(file_name,
+        source_file = self._project.add_source_file(new_file_name,
                                                     self._library_name,
                                                     file_type=file_type,
                                                     include_dirs=include_dirs,
                                                     defines=defines,
                                                     vhdl_standard=vhdl_standard,
                                                     no_parse=no_parse)
+        # To get correct tb_path generic
+        source_file.original_name = file_name
+
         self._test_bench_list.add_from_source_file(source_file)
 
         return SourceFile(source_file,
@@ -1473,8 +1555,8 @@ class TestBench(object):
         :returns: A list of :class:`.Test` objects
         """
         results = []
-        for test_case in self._test_bench.test_cases:
-            if not fnmatch(abspath(test_case.name), pattern):
+        for test_case in self._test_bench.tests:
+            if not fnmatch(test_case.name, pattern):
                 continue
 
             results.append(Test(test_case))
@@ -1801,6 +1883,25 @@ class SourceFile(object):
                 self.add_dependency_on(element)
         else:
             raise ValueError(source_file)
+
+
+class Results(object):
+    """
+    Gives access to results after running tests.
+    """
+
+    def __init__(self, simulator_if):
+        self._simulator_if = simulator_if
+
+    def merge_coverage(self, file_name, args=None):
+        """
+        Create a merged coverage report from the individual coverage files
+
+        :param file_name: The resulting coverage file name.
+        :param args: The tool arguments for the merge command. Should be a list of strings.
+        """
+
+        self._simulator_if.merge_coverage(file_name=file_name, args=args)
 
 
 def select_vhdl_standard(vhdl_standard=None):

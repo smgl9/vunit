@@ -48,7 +48,6 @@ class SimulatorInterface(object):
         """
         Add command line arguments
         """
-        pass
 
     @staticmethod
     def supports_vhdl_2008_contexts():
@@ -98,7 +97,6 @@ class SimulatorInterface(object):
         """
         Find simulator toolchain prefix from PATH environment variable
         """
-        return None
 
     @classmethod
     def is_available(cls):
@@ -132,7 +130,6 @@ class SimulatorInterface(object):
         """
         Returns simulator name when OSVVM coverage API is supported, None otherwise.
         """
-        return None
 
     @classmethod
     def supports_vhdl_package_generics(cls):
@@ -141,17 +138,16 @@ class SimulatorInterface(object):
         """
         return False
 
-    def post_process(self, output_path):
+    def merge_coverage(self, file_name, args):  # pylint: disable=unused-argument, no-self-use
         """
-        Hook for simulator interface to perform post processing such as creating coverage reports
+        Hook for simulator interface to creating coverage reports
         """
-        pass
+        raise RuntimeError("This simulator does not support merging coverage")
 
     def add_simulator_specific(self, project):
         """
         Hook for the simulator interface to add simulator specific things to the project
         """
-        pass
 
     def compile_project(self, project, printer=NO_COLOR_PRINTER, continue_on_error=False):
         """
@@ -165,13 +161,11 @@ class SimulatorInterface(object):
         """
         Simulate
         """
-        pass
 
     def setup_library_mapping(self, project):
         """
         Implemented by specific simulators
         """
-        pass
 
     def __compile_source_file(self, source_file, printer):
         """
@@ -257,9 +251,8 @@ class SimulatorInterface(object):
     @staticmethod
     def get_env():
         """
-        Allows inheriting classes to overload this to modify environment variables
+        Allows inheriting classes to overload this to modify environment variables. Return None for default environment
         """
-        return None  # Default environment
 
 
 def isfile(file_name):

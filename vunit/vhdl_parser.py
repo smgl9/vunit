@@ -4,6 +4,8 @@
 #
 # Copyright (c) 2014-2018, Lars Asplund lars.anders.asplund@gmail.com
 
+# pylint: disable=too-many-lines
+
 """
 VHDL parsing functionality
 """
@@ -401,18 +403,34 @@ class VHDLEntity(object):
     @staticmethod
     def _split_not_in_par(string, sep):
         """
-        Split string at all occurences of sep but not inside of a parenthesis
+        Split string at all occurences of sep but not inside of a parenthesis or quoute
         """
         result = []
         count = 0
         split = []
-        for char in string:
-            if char == '(':
+        quouted = False
+        escaped = False
+
+        for idx, char in enumerate(string):
+            if idx + 1 < len(string):
+                next_char = string[idx + 1]
+            else:
+                next_char = None
+
+            if char == '"' and not escaped:
+                if next_char == '"':
+                    escaped = True
+                else:
+                    quouted = not quouted
+            else:
+                escaped = False
+
+            if char in '(':
                 count += 1
-            elif char == ')':
+            elif char in ')':
                 count -= 1
 
-            if char == sep and count == 0:
+            if char == sep and count == 0 and not quouted:
                 result.append("".join(split))
                 split = []
             else:
@@ -420,7 +438,6 @@ class VHDLEntity(object):
 
         if split:
             result.append("".join(split))
-
         return result
 
     _package_generic_re = re.compile(r"\s*package\s+", re.MULTILINE | re.IGNORECASE)
@@ -765,7 +782,8 @@ class VHDLArrayType(object):
             for char in ranges:
                 if char == ',' and level == 0:
                     return ranges[:index], ranges[index + 1:]
-                elif char == '(':
+
+                if char == '(':
                     level += 1
                 elif char == ')':
                     level -= 1
@@ -784,16 +802,17 @@ class VHDLArrayType(object):
         if unconstrained_range is not None:
             range_type = unconstrained_range.group('range_type')
             return VHDLRange(range_type)
-        else:
-            constrained_range = cls._constrained_range_re.match(the_range)
-            range_attribute = cls._range_attribute_range_re.match(the_range)
-            if constrained_range is not None:
-                range_left = constrained_range.group('range_left')
-                range_right = constrained_range.group('range_right')
-                return VHDLRange(None, range_left, range_right)
-            elif range_attribute is not None:
-                range_attribute = range_attribute.group('range_attribute')
-                return VHDLRange(attribute=range_attribute)
+
+        constrained_range = cls._constrained_range_re.match(the_range)
+        range_attribute = cls._range_attribute_range_re.match(the_range)
+        if constrained_range is not None:
+            range_left = constrained_range.group('range_left')
+            range_right = constrained_range.group('range_right')
+            return VHDLRange(None, range_left, range_right)
+
+        if range_attribute is not None:
+            range_attribute = range_attribute.group('range_attribute')
+            return VHDLRange(attribute=range_attribute)
 
         return VHDLRange()
 
@@ -972,8 +991,17 @@ class VHDLReference(object):
 VHDL_REMOVE_COMMENT_RE = re.compile(r'--[^\n]*')
 
 
+def _comment_repl(match):
+    """
+    Replace comment with equal amount of whitespace to make
+    lexical position unaffected
+    """
+    text = match.group(0)
+    return " " * len(text)
+
+
 def remove_comments(code):
     """
     Return the code with comments removed
     """
-    return VHDL_REMOVE_COMMENT_RE.sub('', code)
+    return VHDL_REMOVE_COMMENT_RE.sub(_comment_repl, code)

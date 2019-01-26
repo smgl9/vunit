@@ -50,7 +50,7 @@ class PersistentTclShell(object):
         except Process.NonZeroExitCode:
             # Print output if background vsim process startup failed
             LOGGER.error("Failed to start re-usable background process")
-            print(consumer.output)
+            LOGGER.error(consumer.output)
             raise
         return process
 
@@ -88,7 +88,10 @@ class PersistentTclShell(object):
             self._processes = {}
 
     def __del__(self):
-        self.teardown()
+        try:
+            self.teardown()
+        except KeyboardInterrupt:
+            LOGGER.debug("PersistentTclShell.__del__: Ignoring KeyboardInterrupt")
 
 
 def output_consumer(line):

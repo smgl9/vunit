@@ -46,7 +46,7 @@ class ActiveHDLInterface(SimulatorInterface):
     ]
 
     @classmethod
-    def from_args(cls, output_path, args):
+    def from_args(cls, args, output_path, **kwargs):
         """
         Create new instance from command line arguments object
         """
@@ -95,7 +95,8 @@ class ActiveHDLInterface(SimulatorInterface):
         """
         if source_file.is_vhdl:
             return self.compile_vhdl_file_command(source_file)
-        elif source_file.is_any_verilog:
+
+        if source_file.is_any_verilog:
             return self.compile_verilog_file_command(source_file)
 
         LOGGER.error("Unknown file type: %s", source_file.file_type)
@@ -263,12 +264,12 @@ proc vunit_run {} {
 }
 """
 
-    def _create_common_script(self, config, script_path):
+    def _create_common_script(self, config, output_path):
         """
         Create tcl script with functions common to interactive and batch modes
         """
         tcl = ""
-        tcl += get_is_test_suite_done_tcl(get_result_file_name(script_path))
+        tcl += get_is_test_suite_done_tcl(get_result_file_name(output_path))
         tcl += self._create_load_function(config)
         tcl += self._create_run_function()
         return tcl
@@ -341,7 +342,7 @@ proc vunit_run {} {
         gui_file_name = join(script_path, "gui.tcl")
 
         write_file(common_file_name,
-                   self._create_common_script(config, script_path))
+                   self._create_common_script(config, output_path))
         write_file(gui_file_name,
                    self._create_gui_script(common_file_name, config))
         write_file(batch_file_name,

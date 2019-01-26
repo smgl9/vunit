@@ -354,8 +354,8 @@ begin
         receive(net, self, msg2);
         check(msg2.id = 2, "Expected first message id to be 2");
       elsif run("Test that each published message gets an increasing message number") then
-        actor_vec := (others => new_actor);
         for i in actor_vec'range loop
+          actor_vec(i) := new_actor;
           subscribe(actor_vec(i), self);
         end loop;
 
@@ -458,8 +458,8 @@ begin
         check_log(com_logger, "[6:- - ->  (-)] =>  inbox", trace);
         unmock(com_logger);
       elsif run("Test receiving from several actors") then
-        actor_vec        := (others => new_actor);
         for i in 0 to 2 loop
+          actor_vec(i) := new_actor;
           subscribe(actor_vec(i), find("publisher " & to_string(i)));
         end loop;
         start_publishers <= true;
@@ -742,12 +742,20 @@ begin
         request_msg  := new_msg(sender => self);
         push_string(request_msg, "request1");
         send(net, server, request_msg);
+
         request_msg2 := new_msg(sender => self);
         push_string(request_msg2, "request2");
         send(net, server, request_msg2);
+
+        receive_reply(net, request_msg, ack);
+        check_false(ack, "Expected negative acknowledgement");
+
         request_msg3 := new_msg(sender => self);
         push_string(request_msg3, "request3");
         send(net, server, request_msg3);
+
+        receive_reply(net, request_msg3, ack);
+        check(ack, "Expected positive acknowledgement");
 
         receive_reply(net, request_msg2, reply_msg);
         check(reply_msg.sender = server);
@@ -755,11 +763,6 @@ begin
         check_equal(pop_string(reply_msg), "reply2");
         check_equal(reply_msg.request_id, request_msg2.id);
 
-        receive_reply(net, request_msg, ack);
-        check_false(ack, "Expected negative acknowledgement");
-
-        receive_reply(net, request_msg3, ack);
-        check(ack, "Expected positive acknowledgement");
       elsif run("Test that a synchronous request can be made") then
         start_server3 <= true;
         server        := find("server3");
@@ -819,26 +822,33 @@ begin
         request_msg  := new_msg(sender => self);
         push_string(request_msg, "request1");
         send(net, server, request_msg);
+
         request_msg2 := new_msg(sender => self);
         push_string(request_msg2, "request2");
         send(net, server, request_msg2);
+
+        wait_for_reply(net, request_msg, status);
+        check(status = ok);
+
+        get_reply(net, request_msg, reply_msg);
+        check_false(pop_boolean(reply_msg));
+
         request_msg3 := new_msg(sender => self);
         push_string(request_msg3, "request3");
         send(net, server, request_msg3);
 
-        wait_for_reply(net, request_msg, status);
-        check(status = ok);
-        wait_for_reply(net, request_msg2, status);
-        check(status = ok);
         wait_for_reply(net, request_msg3, status);
+        check(status = ok);
+
+        get_reply(net, request_msg3, reply_msg);
+        check(pop_boolean(reply_msg));
+
+        wait_for_reply(net, request_msg2, status);
         check(status = ok);
 
         get_reply(net, request_msg2, reply_msg);
         check_equal(pop_string(reply_msg), "reply2");
-        get_reply(net, request_msg, reply_msg);
-        check_false(pop_boolean(reply_msg));
-        get_reply(net, request_msg3, reply_msg);
-        check(pop_boolean(reply_msg));
+
       elsif run("Test that an anonymous request can be made") then
         start_server5 <= true;
         server        := find("server5");
@@ -1308,20 +1318,25 @@ begin
   begin
     wait until start_server2;
     self := new_actor("server2");
+
     receive(net, self, request_msg1);
     check_equal(pop_string(request_msg1), "request1");
+
     receive(net, self, request_msg2);
     check_equal(pop_string(request_msg2), "request2");
-    receive(net, self, request_msg3);
-    check_equal(pop_string(request_msg3), "request3");
 
     reply_msg := new_msg;
     push_string(reply_msg, "reply2");
     reply(net, request_msg2, reply_msg);
     check(reply_msg.sender = self);
     check(reply_msg.receiver = find("test runner"));
-    acknowledge(net, request_msg3, true);
+
     acknowledge(net, request_msg1, false);
+
+    receive(net, self, request_msg3);
+    check_equal(pop_string(request_msg3), "request3");
+
+    acknowledge(net, request_msg3, true);
     wait;
   end process server2;
 

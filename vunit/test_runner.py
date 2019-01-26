@@ -20,8 +20,8 @@ import time
 import logging
 import string
 from contextlib import contextmanager
-import vunit.ostools as ostools
-from vunit.test_report import PASSED, FAILED
+from vunit import ostools
+from vunit.test_report import PASSED, FAILED, SKIPPED
 from vunit.hashing import hash_string
 LOGGER = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class TestRunner(object):  # pylint: disable=too-many-instance-attributes
 
         num_tests = 0
         for test_suite in test_suites:
-            for test_name in test_suite.test_cases:
+            for test_name in test_suite.test_names:
                 num_tests += 1
                 if self._is_verbose:
                     print("Running test: " + test_name)
@@ -143,7 +143,7 @@ class TestRunner(object):  # pylint: disable=too-many-instance-attributes
                 output_file_name = join(output_path, "output.txt")
 
                 with self._stdout_lock():
-                    for test_name in test_suite.test_cases:
+                    for test_name in test_suite.test_names:
                         print("Starting %s" % test_name)
                     print("Output file: %s" % relpath(output_file_name))
 
@@ -159,6 +159,7 @@ class TestRunner(object):  # pylint: disable=too-many-instance-attributes
             except KeyboardInterrupt:
                 # Only main thread should handle KeyboardInterrupt
                 if is_main:
+                    LOGGER.debug("MainWorkerThread: Caught Ctrl-C shutting down")
                     raise
                 else:
                     return
@@ -166,6 +167,11 @@ class TestRunner(object):  # pylint: disable=too-many-instance-attributes
             finally:
                 if test_suite is not None:
                     scheduler.test_done()
+
+    def _add_skipped_tests(self, test_suite, results, start_time, num_tests, output_file_name):
+        for name in test_suite.test_names:
+            results[name] = SKIPPED
+        self._add_results(test_suite, results, start_time, num_tests, output_file_name)
 
     def _run_test_suite(self,
                         test_suite,
@@ -210,7 +216,8 @@ class TestRunner(object):  # pylint: disable=too-many-instance-attributes
             results = test_suite.run(output_path=output_path,
                                      read_output=read_output)
         except KeyboardInterrupt:
-            raise
+            self._add_skipped_tests(test_suite, results, start_time, num_tests, output_file_name)
+            raise KeyboardInterrupt
         except:  # pylint: disable=bare-except
             if self._dont_catch_exceptions:
                 raise
@@ -280,7 +287,7 @@ class TestRunner(object):  # pylint: disable=too-many-instance-attributes
         runtime = ostools.get_time() - start_time
         time_per_test = runtime / len(results)
 
-        for test_name in test_suite.test_cases:
+        for test_name in test_suite.test_names:
             status = results[test_name]
             self._report.add_result(test_name,
                                     status,
@@ -293,7 +300,7 @@ class TestRunner(object):  # pylint: disable=too-many-instance-attributes
     def _fail_suite(test_suite):
         """ Return failure for all tests in suite """
         results = {}
-        for test_name in test_suite.test_cases:
+        for test_name in test_suite.test_names:
             results[test_name] = FAILED
         return results
 
@@ -384,8 +391,8 @@ class TestScheduler(object):
                 idx = self._idx
                 self._idx += 1
                 return self._tests[idx]
-            else:
-                raise StopIteration
+
+            raise StopIteration
 
     def test_done(self):
         """

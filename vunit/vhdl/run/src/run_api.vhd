@@ -15,17 +15,10 @@ library ieee;
 use ieee.std_logic_1164.all;
 
 package run_pkg is
-  signal runner : runner_sync_t := (phase => test_runner_entry,
-                                    locks => ((false, false),
-                                              (false, false),
-                                              (false, false),
-                                              (false, false),
-                                              (false, false),
-                                              (false, false),
-                                              (false, false)),
-                                    exit_without_errors => false);
+  signal runner : runner_sync_t := (runner_event_idx => idle_runner,
+                                    runner_exit_status_idx => runner_exit_with_errors,
+                                    runner_timeout_update_idx => idle_runner);
 
-  constant runner_trace_logger : logger_t := get_logger("runner");
   constant runner_state : runner_t := new_runner;
 
   procedure test_runner_setup (
@@ -81,41 +74,47 @@ package run_pkg is
 
   alias in_test_case is test_case[return boolean];
 
+  -- Set watchdog timeout dynamically relative to current time
+  -- Overrides time argument to test_runner_watchdog procedure
+  procedure set_timeout(signal runner : inout runner_sync_t;
+                        constant timeout : in time);
+
   procedure test_runner_watchdog (
     signal runner                    : inout runner_sync_t;
-    constant timeout                 : in    time);
+    constant timeout                 : in    time;
+    constant do_runner_cleanup : boolean := true);
 
   procedure lock_entry (
-    signal runner : out runner_sync_t;
-    constant phase : in runner_phase_t;
+    signal runner : inout runner_sync_t;
+    constant phase : in runner_legal_phase_t;
     constant me : in string := "";
     constant line_num  : in natural := 0;
     constant file_name : in string := "");
 
   procedure unlock_entry (
-    signal runner : out runner_sync_t;
-    constant phase : in runner_phase_t;
+    signal runner : inout runner_sync_t;
+    constant phase : in runner_legal_phase_t;
     constant me : in string := "";
     constant line_num  : in natural := 0;
     constant file_name : in string := "");
 
   procedure lock_exit (
-    signal runner : out runner_sync_t;
-    constant phase : in runner_phase_t;
+    signal runner : inout runner_sync_t;
+    constant phase : in runner_legal_phase_t;
     constant me : in string := "";
     constant line_num  : in natural := 0;
     constant file_name : in string := "");
 
   procedure unlock_exit (
-    signal runner : out runner_sync_t;
-    constant phase : in runner_phase_t;
+    signal runner : inout runner_sync_t;
+    constant phase : in runner_legal_phase_t;
     constant me : in string := "";
     constant line_num  : in natural := 0;
     constant file_name : in string := "");
 
   procedure wait_until (
     signal runner : in runner_sync_t;
-    constant phase : in runner_phase_t;
+    constant phase : in runner_legal_phase_t;
     constant me : in string := "";
     constant line_num  : in natural := 0;
     constant file_name : in string := "");
@@ -156,5 +155,9 @@ package run_pkg is
   alias test_suite_cleanup_exit_gate is exit_gate[runner_sync_t];
   alias test_runner_cleanup_entry_gate is entry_gate[runner_sync_t];
   alias test_runner_cleanup_exit_gate is exit_gate[runner_sync_t];
+
+  -- Private
+  procedure notify(signal runner : inout runner_sync_t;
+                   idx : natural := runner_event_idx);
 
 end package;
